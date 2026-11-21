@@ -34,6 +34,36 @@ if (tail.readUInt32BE(0) !== 0 || tail.toString("ascii", 4, 8) !== "IEND") {
   throw new Error("entry.png has no intact trailing IEND chunk");
 }
 
+// Walk every chunk and verify its CRC32 (type bytes + data), so a truncated
+// or corrupted middle chunk is caught, not just a missing IEND.
+const crcTable = [];
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  crcTable.push(c >>> 0);
+}
+const crc32 = (b) => {
+  let c = 0xffffffff;
+  for (let i = 0; i < b.length; i++) c = crcTable[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+let off = 8;
+let sawIEND = false;
+while (off + 8 <= buf.length) {
+  const len = buf.readUInt32BE(off);
+  const type = buf.toString("ascii", off + 4, off + 8);
+  if (off + 12 + len > buf.length) throw new Error(`chunk ${type} overruns the file`);
+  const stored = buf.readUInt32BE(off + 8 + len);
+  const actual = crc32(buf.subarray(off + 4, off + 8 + len));
+  if (stored !== actual) throw new Error(`chunk ${type} fails its CRC check`);
+  off += 12 + len;
+  if (type === "IEND") {
+    sawIEND = true;
+    break;
+  }
+}
+if (!sawIEND || off !== buf.length) throw new Error("trailing bytes after IEND");
+
 mkdirSync(outDir, { recursive: true });
 copyFileSync(src, join(outDir, "entry.png"));
 console.log(`entry.png ${width}x${height}, ${buf.length} bytes -> ${join(outDir, "entry.png")}`);
