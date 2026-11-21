@@ -1,0 +1,39 @@
+// news-image-20261121 v2 — entrypoint (Node 22, stdlib only).
+// Validates the bundled front-page image and copies it to the output dir.
+// The image is a fixed asset: both runs write byte-identical output.
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = dirname(fileURLToPath(import.meta.url));
+const src = join(root, "entry.png");
+
+const outDir = process.env.MAKEFUN_OUTPUT_DIR;
+if (!outDir) throw new Error("MAKEFUN_OUTPUT_DIR is not set");
+
+const buf = readFileSync(src);
+
+// PNG magic: 89 50 4E 47 0D 0A 1A 0A
+const magic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+if (!buf.subarray(0, 8).equals(magic)) throw new Error("entry.png is not a PNG");
+
+// Size cap: at most 1 MiB (1048576 bytes)
+if (buf.length > 1048576) throw new Error(`entry.png too large: ${buf.length} bytes`);
+
+// IHDR must be the first chunk and must describe at most 1024x1024.
+if (buf.toString("ascii", 12, 16) !== "IHDR") throw new Error("first chunk is not IHDR");
+const width = buf.readUInt32BE(16);
+const height = buf.readUInt32BE(20);
+if (width > 1024 || height > 1024) {
+  throw new Error(`entry.png too big: ${width}x${height}`);
+}
+
+// IEND must close the file: 00 00 00 00 49 45 4e 44 + CRC.
+const tail = buf.subarray(buf.length - 12);
+if (tail.readUInt32BE(0) !== 0 || tail.toString("ascii", 4, 8) !== "IEND") {
+  throw new Error("entry.png has no intact trailing IEND chunk");
+}
+
+mkdirSync(outDir, { recursive: true });
+copyFileSync(src, join(outDir, "entry.png"));
+console.log(`entry.png ${width}x${height}, ${buf.length} bytes -> ${join(outDir, "entry.png")}`);
